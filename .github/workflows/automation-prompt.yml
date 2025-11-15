@@ -1,0 +1,154 @@
+name: Automation Prompt Runner
+
+on:
+  workflow_dispatch:
+    inputs:
+      prompt:
+        description: 'The automation prompt to run (string)'
+        required: true
+      spec_file:
+        description: 'Path to a spec file under .github/specs to use as the prompt (overrides prompt input)'
+        required: false
+      feature:
+        description: 'Feature folder under .github/specs; will look for automation_prompt.md, prompt.md or design.md'
+        required: false
+      execute:
+        description: 'Set to true to actually execute the prompt. Default is false (dry-run).'
+        required: false
+        default: 'false'
+      shell:
+        description: 'Shell to use when executing (bash or sh).'
+        required: false
+        default: 'bash'
+
+jobs:
+  run-prompt:
+    name: Run automation prompt
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (best-effort)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Show inputs (dry-run)
+        id: show
+        shell: bash
+        run: |
+          echo "Inputs summary:" >&2
+          echo "  spec_file: '${{ github.event.inputs.spec_file }}'" >&2
+          echo "  feature: '${{ github.event.inputs.feature }}'" >&2
+          echo "  execute: '${{ github.event.inputs.execute }}'" >&2
+          echo
+          echo "If spec_file or feature provided, the prompt is taken from the repository file. Otherwise the 'prompt' input is used."
+          echo
+          echo "Prompt (first 400 chars):"
+          if [ -n "${{ github.event.inputs.spec_file }}" ] || [ -n "${{ github.event.inputs.feature }}" ]; then
+            echo "(prompt will be read from repository file)"
+          else
+            printf "%s" "${{ github.event.inputs.prompt }}" | cut -c -400
+          fi
+          echo
+          echo "\n-- Writing prompt to GITHUB_STEP_SUMMARY --"
+          echo "### Automation Prompt Run" >> $GITHUB_STEP_SUMMARY
+          echo "**Execute flag:** ${{ github.event.inputs.execute }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Shell:** ${{ github.event.inputs.shell }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Prompt source:**" >> $GITHUB_STEP_SUMMARY
+          if [ -n "${{ github.event.inputs.spec_file }}" ]; then
+            echo "Repository file: ${{ github.event.inputs.spec_file }}" >> $GITHUB_STEP_SUMMARY
+          elif [ -n "${{ github.event.inputs.feature }}" ]; then
+            echo "Repository feature: ${{ github.event.inputs.feature }} (will search standard files)" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "Inline input" >> $GITHUB_STEP_SUMMARY
+            echo "**Prompt (full):**" >> $GITHUB_STEP_SUMMARY
+            printf "%s" "${{ github.event.inputs.prompt }}" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Resolve prompt source (repo file or inline)
+        id: resolve
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Priority: spec_file -> feature (search candidates) -> inline prompt input
+          if [ -n "${{ github.event.inputs.spec_file }}" ]; then
+            SPEC="${{ github.event.inputs.spec_file }}"
+            if [ ! -f "$SPEC" ]; then
+              echo "::error::Spec file not found: $SPEC"
+              exit 1
+            fi
+            cp "$SPEC" prompt.txt
+            echo "prompt_path=$SPEC" >> $GITHUB_OUTPUT
+          elif [ -n "${{ github.event.inputs.feature }}" ]; then
+            FEATURE="${{ github.event.inputs.feature }}"
+            CANDIDATES=(".github/specs/$FEATURE/automation_prompt.md" ".github/specs/$FEATURE/prompt.md" ".github/specs/$FEATURE/design.md")
+            FOUND=0
+            for c in "${CANDIDATES[@]}"; do
+              if [ -f "$c" ]; then
+                cp "$c" prompt.txt
+                echo "prompt_path=$c" >> $GITHUB_OUTPUT
+                FOUND=1
+                break
+              fi
+            done
+            if [ "$FOUND" -eq 0 ]; then
+              echo "::error::No prompt file found for feature $FEATURE (checked candidates)"
+              exit 1
+            fi
+          else
+            # Inline prompt input
+            printf "%s" "${{ github.event.inputs.prompt }}" > prompt.txt
+            echo "prompt_path=inline" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Validate prompt size
+        id: validate
+        shell: bash
+        run: |
+          PROMPT_FILE=prompt.txt
+          # If resolve step already created prompt.txt, keep it. Otherwise write inline prompt to file.
+          if [ ! -f "$PROMPT_FILE" ]; then
+            printf "%s" "${{ github.event.inputs.prompt }}" > $PROMPT_FILE
+          fi
+          BYTES=$(wc -c < $PROMPT_FILE | tr -d ' ')
+          MB=$(awk -v b="$BYTES" 'BEGIN{printf "%.3f", b/1024/1024}')
+          echo "Prompt size: $MB MB"
+          if awk -v b=$BYTES 'BEGIN{ if (b > 3072000) exit 1 }'; then
+            echo "Size OK"
+          else
+            echo "::error::Prompt exceeds 3 MB limit"
+            exit 1
+          fi
+
+      - name: Execute prompt (only if execute=true)
+        if: ${{ github.event.inputs.execute == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Running prompt (script)"
+          # Use the resolved prompt file to create an executable script
+          if [ ! -f prompt.txt ]; then
+            echo "::error::No prompt.txt found to execute"
+            exit 1
+          fi
+          cp prompt.txt prompt_to_run.sh
+          chmod +x prompt_to_run.sh || true
+          # Execute and capture stdout/stderr
+          bash -lc './prompt_to_run.sh' > prompt.stdout 2> prompt.stderr || true
+          echo "Execution finished. stdout/stderr saved to files."
+
+      - name: Upload execution logs
+        if: ${{ github.event.inputs.execute == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: automation-prompt-logs
+          path: |
+            prompt_to_run.sh
+            prompt.stdout
+            prompt.stderr
+          if-no-files-found: warn
+
+      - name: Dry-run note (if not executed)
+        if: ${{ github.event.inputs.execute != 'true' }}
+        run: |
+          echo "Execution flag not set; this was a dry-run. To execute provide execute=true when running the workflow." 
