@@ -1,0 +1,146 @@
+name: Spec Design Document Hook
+
+on:
+  workflow_dispatch:
+    inputs:
+      files:
+        description: 'Newline-separated list of .github/specs/**/design.md files to validate'
+        required: false
+      feature:
+        description: 'Feature folder under .github/specs/ (validates .github/specs/<feature>/design.md)'
+        required: false
+
+jobs:
+  validate-and-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (best-effort)
+        uses: actions/checkout@v4
+        continue-on-error: true
+
+      - name: Resolve target files (inputs or repo)
+        id: setfiles
+        shell: bash
+        run: |
+          INPUT_FILES="${{ github.event.inputs.files }}"
+          INPUT_FEATURE="${{ github.event.inputs.feature }}"
+          if [ -n "$INPUT_FILES" ]; then
+            echo "Using files from input"
+            printf "%s\n" "$INPUT_FILES" | sed '/^$/d' > files.txt
+          elif [ -n "$INPUT_FEATURE" ]; then
+            FILE=".github/specs/$INPUT_FEATURE/design.md"
+            if [ -f "$FILE" ]; then
+              echo "$FILE" > files.txt
+            else
+              echo "::error::Design file not found for feature '$INPUT_FEATURE' at $FILE"
+              exit 1
+            fi
+          else
+            echo "No inputs provided; scanning workspace for design.md files"
+            if [ -d .github/specs ]; then
+              # Use portable find instead of git ls-files
+              find .github/specs -type f -name 'design.md' | sort > files.txt || true
+            else
+              : > files.txt
+            fi
+            if [ ! -s files.txt ]; then
+              echo "::warning::No design.md files found under .github/specs"
+            fi
+          fi
+          echo "files<<EOF" >> $GITHUB_OUTPUT
+          cat files.txt >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Dry run — show resolved files
+        shell: bash
+        run: |
+          echo "--- Spec Design Dry Run ---"
+          echo "Workflow inputs:" >&2
+          echo "  files: '${{ github.event.inputs.files }}'" >&2
+          echo "  feature: '${{ github.event.inputs.feature }}'" >&2
+          echo "Resolved target files:" >> "$GITHUB_STEP_SUMMARY"
+          if [ -f files.txt ]; then
+            if [ -s files.txt ]; then
+              sed 's/^/ - /' files.txt >> "$GITHUB_STEP_SUMMARY"
+              echo "Resolved files:" >&2
+              sed 's/^/ - /' files.txt >&2
+            else
+              echo " (none)" >> "$GITHUB_STEP_SUMMARY"
+              echo "No resolved files." >&2
+            fi
+          else
+            echo "No files.txt present; nothing resolved." >> "$GITHUB_STEP_SUMMARY"
+            echo "No files.txt present; nothing resolved." >&2
+          fi
+
+      - name: Validate constraints
+        if: ${{ steps.setfiles.outputs.files != '' }}
+        id: validate
+        run: |
+          FAIL=0
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            echo "Validating $f"
+            # file size check (<= 3 MB) using portable wc -c
+            BYTES=$(wc -c < "$f" | tr -d ' ')
+            MB=$(awk -v b="$BYTES" 'BEGIN{printf "%.2f", b/1024/1024}')
+            echo "Size: $MB MB"
+            awk -v m="$MB" 'BEGIN{ if (m>3.0) { exit 1 } }' || { echo "::error file=$f::File exceeds 3 MB"; FAIL=1; }
+            # derive feature_name from path .github/specs/<feature_name>/design.md
+            FEATURE=$(echo "$f" | sed -E 's#.github/specs/([^/]+)/design.md#\1#')
+            if [ -z "$FEATURE" ] || [ "$FEATURE" = "$f" ]; then
+              echo "::warning file=$f::Could not derive feature_name; using directory name"
+              FEATURE=$(basename "$(dirname "$f")")
+            fi
+            REQ=.github/specs/$FEATURE/requirements.md
+            if [ ! -f "$REQ" ]; then
+              echo "::error file=$f::Missing required file: $REQ"
+              FAIL=1
+            else
+              echo "Found requirements: $REQ"
+            fi
+          done <<EOF
+          ${{ steps.setfiles.outputs.files }}
+          EOF
+          if [ "$FAIL" -ne 0 ]; then
+            echo "Validation failed"
+            exit 1
+          fi
+
+      - name: Prepare agent request summary
+        if: ${{ steps.setfiles.outputs.files != '' }}
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" << 'EOF'
+          ### Spec Design Triggered
+
+          A design document has been created or modified. Please review and help develop the technical design using the spec-design-document workflow.
+
+          Follow the design document creation process:
+          1. Ensure requirements.md exists and is approved
+          2. Conduct necessary research based on feature requirements
+          3. Create comprehensive design covering all required sections
+          4. Include diagrams (Mermaid) when appropriate
+          5. Address all requirements from the requirements document
+          6. Get user approval before proceeding to implementation planning
+
+          Required sections: Overview, Architecture, Components and Interfaces, Data Models, Error Handling, Testing Strategy, Security Considerations, Performance Requirements
+
+          Context files to consult:
+          - .github/spec-design-document.md
+          - .github/specs/**/requirements.md
+          - README.md
+          - .github/specs/**/tasks.md
+          EOF
+
+      - name: Upload context and changed files
+        uses: actions/upload-artifact@v4
+        if: ${{ steps.setfiles.outputs.files != '' }}
+        with:
+          name: spec-design-context
+          path: |
+            ${{ steps.setfiles.outputs.files }}
+            .github/spec-design-document.md
+            README.md
+            .github/specs/**/requirements.md
+            .github/specs/**/tasks.md
+          if-no-files-found: ignore

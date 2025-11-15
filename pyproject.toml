@@ -1,0 +1,8 @@
+[tool.poetry]
+name = "mcp-stock-agent"
+version = "0.1.0"
+description = "MCP agent to fetch stock evolution"
+
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"

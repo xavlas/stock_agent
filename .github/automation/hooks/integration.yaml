@@ -1,0 +1,60 @@
+# Cross-Feature Integration Hook Configuration
+name: "Cross-Feature Integration Analysis"
+version: "1.0"
+description: "Automatically analyzes integration impacts when multiple features exist"
+
+triggers:
+  - pattern: ".github/specs/**/requirements.md"
+    events: ["create"]
+  - pattern: ".github/specs/**/design.md"
+    events: ["modify"]
+
+conditions:
+  and:
+    - spec_count: { min: 2 }  # Only trigger when multiple features exist
+    - or:
+      - event_type: "create"  # Always run for new features
+      - change_size: { min: 50 }  # Or significant design changes
+
+agent_request: |
+  Use the enhanced coordination prompt to analyze cross-feature integration impacts.
+  
+  #enhanced-coordination
+  
+  Please perform comprehensive cross-feature integration analysis focusing on:
+  
+  1. Dependency identification and conflict detection
+  2. Shared component and interface analysis
+  3. Integration sequencing recommendations
+  4. Resource competition and bottleneck identification
+  5. Communication protocol and data flow analysis
+  
+  Generate integration strategy with specific recommendations for coordination.
+
+context_files:
+  - ".github/specs/**/*.md"  # All specifications for cross-feature analysis
+  - ".github/enhanced-prompts/spec-cross-feature-integration.md"
+  - ".github/enhanced-prompt-selector.md"
+
+scope: "all_features"
+output_pattern: ".github/analysis/integration-analysis-{timestamp}.md"
+
+workflow_metadata:
+  stage: "coordination"
+  priority: "high"
+  blocking: false
+  timeout: "10m"
+
+context_sharing:
+  exports:
+    - integration_dependencies: "dependency_graph"
+    - shared_components: "component_list"
+    - conflict_points: "conflict_summary"
+  
+success_criteria:
+  - output_contains: "INTEGRATION ANALYSIS COMPLETE"
+  - dependency_graph_generated: true
+
+follow_up_hooks:
+  - trigger_if_conflicts: "conflict-resolution-workflow"
+  - trigger_if_shared_components: "component-coordination-hook"

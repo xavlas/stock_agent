@@ -1,0 +1,27 @@
+name: "Spec Design Document Hook"
+description: "Automatically triggers design document creation workflow when design files are created or modified"
+triggers:
+  - pattern: ".github/specs/**/design.md"
+    events: ["create", "modify"]
+conditions:
+  - file_size_mb: { max: 3 }
+  - requires_file: ".github/specs/{feature_name}/requirements.md"
+agent_request: |
+  A design document has been created or modified. Please review and help develop the technical design using the spec-design-document workflow.
+
+  Follow the design document creation process:
+  1. Ensure requirements.md exists and is approved
+  2. Conduct necessary research based on feature requirements
+  3. Create comprehensive design covering all required sections
+  4. Include diagrams (Mermaid) when appropriate
+  5. Address all requirements from the requirements document
+  6. Get user approval before proceeding to implementation planning
+
+  Required sections: Overview, Architecture, Components and Interfaces, Data Models, Error Handling, Testing Strategy, Security Considerations, Performance Requirements
+context_files:
+  - ".github/spec-design-document.md"
+  - ".github/specs/**/requirements.md"
+  - "README.md"
+  - ".github/specs/**/tasks.md"
+scope: "project"
+priority: "high"

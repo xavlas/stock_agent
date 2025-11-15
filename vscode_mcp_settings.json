@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "stock-evolution": {
+      "command": "python",
+      "args": [
+        "/Users/xavier/Documents/github/mcp_stock_agent/mcp_vscode_server.py"
+      ],
+      "env": {
+        "PYTHONPATH": "/Users/xavier/Documents/github/mcp_stock_agent"
+      }
+    }
+  }
+}
